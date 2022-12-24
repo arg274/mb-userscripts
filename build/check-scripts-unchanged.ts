@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 
+import { buildUserscript } from './rollup';
 import { getPreviousReleaseVersion, userscriptHasChanged } from './versions';
 
 if (!process.env.GITHUB_ACTIONS) {
@@ -20,7 +21,11 @@ async function checkUserscriptsChanged(): Promise<void> {
             throw new Error('I encountered a userscript which has not been deployed yet!');
         }
 
-        if (await userscriptHasChanged(scriptName, previousVersion, distRepo)) {
+        // Check against the main branch.
+        if (await userscriptHasChanged(scriptName, 'main')) {
+            // Build it again into the dist repo so that the changes can be
+            // displayed.
+            await buildUserscript(scriptName, previousVersion, distRepo);
             throw new Error(`Userscript ${scriptName} would be changed`);
         }
     }

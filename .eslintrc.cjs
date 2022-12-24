@@ -209,7 +209,10 @@ module.exports = {
         // Doesn't always work with transpiling into userscripts, ts-node, etc.
         'unicorn/prefer-top-level-await': 'off',
 
+        'unicorn/no-negated-condition': 'off',
         'unicorn/no-process-exit': 'off',
+        // Clashes with switch-case/no-case-curly
+        'unicorn/switch-case-braces': 'off',
 
         // Already included in unicorn/better-regex and doesn't allow disabling the sorting
         'optimize-regex/optimize-regex': 'off',
