@@ -15,8 +15,8 @@ module.exports = {
     extends: [
         'eslint:recommended',
         'plugin:@typescript-eslint/eslint-recommended',
-        'plugin:@typescript-eslint/recommended',
-        'plugin:@typescript-eslint/recommended-requiring-type-checking',
+        'plugin:@typescript-eslint/strict-type-checked',
+        'plugin:@typescript-eslint/stylistic-type-checked',
         'plugin:eslint-comments/recommended',
         'adjunct',
     ],
@@ -211,6 +211,11 @@ module.exports = {
         // places where in my opinion, an explicit `undefined` reduced confusion.
         'unicorn/no-useless-undefined': 'off',
 
+        // Not available in browsers, and too expensive to polyfill.
+        'unicorn/prefer-at': 'off',
+        'unicorn/prefer-blob-reading-methods': 'off',
+        'unicorn/prefer-string-replace-all': 'off',
+
         // Doesn't always work with transpiling into userscripts, ts-node, etc.
         'unicorn/prefer-top-level-await': 'off',
 
@@ -251,6 +256,9 @@ module.exports = {
             // Allow shadowing in tests as we sometimes use it to define
             // common data, but refine the data in some specific test cases
             '@typescript-eslint/no-shadow': 'off',
+            // Turn off this stylistic rule because we need the ["key"] notation
+            // to access private object properties.
+            '@typescript-eslint/dot-notation': 'off',
         },
     }, {
         files: ['*.d.ts'],

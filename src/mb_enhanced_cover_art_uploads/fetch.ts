@@ -1,10 +1,13 @@
-import type { FetchProgress} from '@lib/util/xhr';
+import pRetry from 'p-retry';
+
+import type { BlobResponse, ProgressEvent } from '@lib/util/request';
 import { getFromPageContext } from '@lib/compat';
 import { LOGGER } from '@lib/logging/logger';
 import { ArtworkTypeIDs } from '@lib/MB/CoverArt';
 import { enumerate } from '@lib/util/array';
+import { blobToBuffer } from '@lib/util/blob';
+import { HTTPResponseError, request } from '@lib/util/request';
 import { urlBasename } from '@lib/util/urls';
-import { gmxhr } from '@lib/util/xhr';
 
 import type { CoverArtProvider } from './providers/base';
 import type { BareCoverArt, CoverArt, FetchedImage, ImageContents, QueuedImage, QueuedImageBatch } from './types';
@@ -24,7 +27,7 @@ export interface FetcherHooks {
     /** Called when fetching an image has started. */
     onFetchStarted?(imageId: number, url: URL): void;
     /** Called to notify of progress of fetch. */
-    onFetchProgress?(imageId: number, url: URL, progress: FetchProgress): void;
+    onFetchProgress?(imageId: number, url: URL, progress: ProgressEvent): void;
     /** Called when fetching has finished, either successfully or failed. */
     onFetchFinished?(imageId: number): void;
 }
@@ -204,16 +207,32 @@ export class ImageFetcher {
     }
 
     private async fetchImageContents(url: URL, fileName: string, id: number, headers: Record<string, string>): Promise<ImageContents> {
-        const resp = await gmxhr(url, {
+        const xhrOptions = {
             responseType: 'blob',
             headers: headers,
-            progressCb: this.hooks.onFetchProgress?.bind(this.hooks, id, url),
+            onProgress: this.hooks.onFetchProgress?.bind(this.hooks, id, url),
+        } as const;
+
+        // Need to retry image loading because some services, like Discogs, may
+        // return 429 HTTP errors.
+        // TODO: Copied from seeding/atisket/dimensions.ts, should be put in lib.
+        const resp = await pRetry(() => request.get(url, xhrOptions), {
+            retries: 10,
+            onFailedAttempt: (err) => {
+                // Don't retry on 4xx status codes except for 429. Anything below 400 doesn't throw a HTTPResponseError.
+                if (!(err instanceof HTTPResponseError) || (err.statusCode < 500 && err.statusCode !== 429)) {
+                    throw err;
+                }
+
+                LOGGER.info(`Failed to retrieve image contents after ${err.attemptNumber} attempt(s): ${err.message}. Retrying (${err.retriesLeft} attempt(s) left)…`);
+            },
         });
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        if (resp.finalUrl === undefined) {
+
+        if (resp.url === undefined) {
             LOGGER.warn(`Could not detect if URL ${url.href} caused a redirect`);
         }
-        const fetchedUrl = new URL(resp.finalUrl || url);
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- Could be empty string.
+        const fetchedUrl = new URL(resp.url || url);
         const wasRedirected = fetchedUrl.href !== url.href;
 
         if (wasRedirected) {
@@ -239,20 +258,24 @@ export class ImageFetcher {
             throw new Error('Expected to receive an image, but received text. Perhaps this provider is not supported yet?');
         }
 
+        // Convert and copy the response blob to a buffer.
+        // We copy the content to make sure the contents do not get unloaded
+        // before the image is uploaded. See https://github.com/ROpdebee/mb-userscripts/issues/582
+        const contentBuffer = await blobToBuffer(resp.blob);
+
         return {
             requestedUrl: url,
             fetchedUrl,
             wasRedirected,
             file: new File(
-                [resp.response as Blob],
+                [contentBuffer],
                 this.createUniqueFilename(fileName, id, mimeType),
                 { type: mimeType }),
         };
     }
 
-    // eslint-disable-next-line no-restricted-globals
-    private async determineMimeType(resp: GM.Response<never>): Promise<{ mimeType: string; isImage: true } | { mimeType: string | undefined; isImage: false }> {
-        const rawFile = new File([resp.response as Blob], 'image');
+    private async determineMimeType(resp: BlobResponse): Promise<{ mimeType: string; isImage: true } | { mimeType: string | undefined; isImage: false }> {
+        const rawFile = new File([resp.blob], 'image');
         return new Promise((resolve) => {
             // Adapted from https://github.com/metabrainz/musicbrainz-server/blob/2b00b844f3fe4293fc4ccb9de1c30e3c2ddc95c1/root/static/scripts/edit/MB/CoverArt.js#L139
             // We can't use MB.CoverArt.validate_file since it's not available
@@ -282,7 +305,7 @@ export class ImageFetcher {
 
                     default:
                         resolve({
-                            mimeType: resp.responseHeaders.match(/content-type:\s*([^;\s]+)/i)?.[1],
+                            mimeType: resp.headers.get('Content-Type')?.match(/[^;\s]+/)?.[0],
                             isImage: false,
                         });
                     }

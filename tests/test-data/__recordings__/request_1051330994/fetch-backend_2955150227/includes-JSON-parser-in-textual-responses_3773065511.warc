@@ -1,0 +1,98 @@
+WARC/1.1
+WARC-Filename: request/fetch backend/includes JSON parser in textual responses
+WARC-Date: 2023-08-02T21:20:11.375Z
+WARC-Type: warcinfo
+WARC-Record-ID: <urn:uuid:028f56b7-7a2e-4afa-aacb-5c817968de64>
+Content-Type: application/warc-fields
+Content-Length: 119
+
+software: warcio.js
+harVersion: 1.2
+harCreator: {"name":"Polly.JS","version":"6.0.5","comment":"persister:fs-warc"}
+
+
+WARC/1.1
+WARC-Concurrent-To: <urn:uuid:79f5ce0a-2b9f-4508-a027-7bd5f42a3e3b>
+WARC-Target-URI: https://httpbin.org/json
+WARC-Date: 2023-08-02T21:20:11.376Z
+WARC-Type: request
+WARC-Record-ID: <urn:uuid:4ae53c80-f7be-445f-91c8-44a5ec3f29e3>
+Content-Type: application/http; msgtype=request
+WARC-Payload-Digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+WARC-Block-Digest: sha256:46d5d046ff613456d65cb68b4e381c9b2a1e518d9c39132ac490bbc1e9690658
+Content-Length: 114
+
+GET /json HTTP/1.1
+accept: */*
+accept-encoding: gzip, deflate, br
+user-agent: node-fetch
+host: httpbin.org
+
+
+
+WARC/1.1
+WARC-Concurrent-To: <urn:uuid:79f5ce0a-2b9f-4508-a027-7bd5f42a3e3b>
+WARC-Target-URI: https://httpbin.org/json
+WARC-Date: 2023-08-02T21:20:11.376Z
+WARC-Type: metadata
+WARC-Record-ID: <urn:uuid:711810b5-f05e-4006-9c61-1856bdf55cad>
+Content-Type: application/warc-fields
+WARC-Payload-Digest: sha256:e3ab84164bc7fb6de4657feee960ecf96fd756413fcb283faf3f6ec5a90ab957
+WARC-Block-Digest: sha256:e3ab84164bc7fb6de4657feee960ecf96fd756413fcb283faf3f6ec5a90ab957
+Content-Length: 349
+
+harEntryId: 489045d2899e823696cff078153f6314
+harEntryOrder: 0
+cache: {}
+startedDateTime: 2023-08-02T21:20:11.192Z
+time: 178
+timings: {"blocked":-1,"dns":-1,"connect":-1,"send":0,"wait":178,"receive":0,"ssl":-1}
+warcRequestHeadersSize: 133
+warcRequestCookies: []
+warcResponseHeadersSize: 213
+warcResponseCookies: []
+responseDecoded: false
+
+
+WARC/1.1
+WARC-Target-URI: https://httpbin.org/json
+WARC-Date: 2023-08-02T21:20:11.375Z
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:79f5ce0a-2b9f-4508-a027-7bd5f42a3e3b>
+Content-Type: application/http; msgtype=response
+WARC-Payload-Digest: sha256:bab3dfd2a6c992e4bf589eee05fc9650cc9d6988660b947a7a87b99420d108f9
+WARC-Block-Digest: sha256:503a68db2ede5e757521e7a7a65f52af4a597cf99ad9ad5ae65fa11a5ce537c6
+Content-Length: 659
+
+HTTP/1.1 200 OK
+date: Wed, 02 Aug 2023 21:20:11 GMT
+content-type: application/json
+content-length: 429
+connection: keep-alive
+server: gunicorn/19.9.0
+access-control-allow-origin: *
+access-control-allow-credentials: true
+
+{
+  "slideshow": {
+    "author": "Yours Truly", 
+    "date": "date of publication", 
+    "slides": [
+      {
+        "title": "Wake up to WonderWidgets!", 
+        "type": "all"
+      }, 
+      {
+        "items": [
+          "Why <em>WonderWidgets</em> are great", 
+          "Who <em>buys</em> WonderWidgets"
+        ], 
+        "title": "Overview", 
+        "type": "all"
+      }
+    ], 
+    "title": "Sample Slide Show"
+  }
+}
+
+

@@ -1,6 +1,6 @@
 import { assert, assertHasValue } from '@lib/util/assert';
 import { safeParseJSON } from '@lib/util/json';
-import { gmxhr } from '@lib/util/xhr';
+import { request } from '@lib/util/request';
 
 import type { CoverArt } from '../types';
 import { CoverArtProvider } from './base';
@@ -49,7 +49,7 @@ export class DiscogsProvider extends CoverArtProvider {
     // We're using promises so we can make an entry as soon as we create a
     // request to the API, to prevent multiple concurrent requests in async
     // code.
-    private static readonly apiResponseCache: Map<string, Promise<DiscogsImages>> = new Map();
+    private static readonly apiResponseCache = new Map<string, Promise<DiscogsImages>>();
 
     public async findImages(url: URL): Promise<CoverArt[]> {
         // Loading the full HTML and parsing the metadata JSON embedded within
@@ -98,9 +98,9 @@ export class DiscogsProvider extends CoverArtProvider {
                 },
             }),
         });
-        const resp = await gmxhr(`https://www.discogs.com/internal/release-page/api/graphql?${graphqlParams}`);
+        const resp = await request.get(`https://www.discogs.com/internal/release-page/api/graphql?${graphqlParams}`);
 
-        const metadata = safeParseJSON<DiscogsImages>(resp.responseText, 'Invalid response from Discogs API');
+        const metadata = safeParseJSON<DiscogsImages>(resp.text, 'Invalid response from Discogs API');
         assertHasValue(metadata.data.release, 'Discogs release does not exist');
         const responseId = metadata.data.release.discogsId.toString();
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition

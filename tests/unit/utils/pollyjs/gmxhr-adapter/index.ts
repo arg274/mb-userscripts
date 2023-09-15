@@ -20,9 +20,7 @@ const FAKE_HEADERS = {
 
 // eslint-disable-next-line @typescript-eslint/ban-types
 export default class GMXHRAdapter<Context> extends Adapter<{}, RequestType<Context>> {
-    public static override get id(): string {
-        return 'GM_xmlhttpRequest';
-    }
+    public static override readonly id = 'GM_xmlhttpRequest';
 
     public override onConnect(): void {
         mockGMxmlHttpRequest.mockImplementation((options: GM.Request<Context>): void => {
@@ -113,7 +111,7 @@ export default class GMXHRAdapter<Context> extends Adapter<{}, RequestType<Conte
 
         if (response.encoding === 'base64') {
             const buffer = Buffer.from(response.body ?? '', 'base64');
-            const arrayBuffer = Uint8Array.from(buffer);
+            const arrayBuffer = Uint8Array.from(buffer).buffer;
             if (responseType === 'blob') {
                 options.onload({
                     ...resp,

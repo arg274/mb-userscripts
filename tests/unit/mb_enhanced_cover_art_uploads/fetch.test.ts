@@ -1,16 +1,24 @@
+import type { FailedAttemptError } from 'p-retry';
+import pRetry from 'p-retry';
+
+import type { Response } from '@lib/util/request';
 import type { MaximisedImage } from '@src/mb_enhanced_cover_art_uploads/maximise';
 import type { ImageContents, QueuedImage } from '@src/mb_enhanced_cover_art_uploads/types';
+import { LOGGER } from '@lib/logging/logger';
 import { ArtworkTypeIDs } from '@lib/MB/CoverArt';
-import { gmxhr, NetworkError } from '@lib/util/xhr';
+import { HTTPResponseError } from '@lib/util/request';
+import { NetworkError, request } from '@lib/util/request';
 import { ImageFetcher } from '@src/mb_enhanced_cover_art_uploads/fetch';
 import { enqueueImage } from '@src/mb_enhanced_cover_art_uploads/form';
 import { getMaximisedCandidates } from '@src/mb_enhanced_cover_art_uploads/maximise';
 import { getProvider, getProviderByDomain } from '@src/mb_enhanced_cover_art_uploads/providers';
 import { CoverArtProvider } from '@src/mb_enhanced_cover_art_uploads/providers/base';
 
-import { createCoverArt, createImageFile, createXhrResponse } from './test-utils/dummy-data';
+import { createBlobResponse, createCoverArt, createHttpError, createImageFile } from './test-utils/dummy-data';
 
-jest.mock('@lib/util/xhr');
+jest.mock('p-retry');
+jest.mock('@lib/logging/logger');
+jest.mock('@lib/util/request');
 // We need to provide a mock factory, because for some reason, either jest or
 // rewire is not recognising the generator, leading to `getMaximisedCandidates`
 // being undefined in this test suite.
@@ -20,7 +28,12 @@ jest.mock<{ getMaximisedCandidates: typeof getMaximisedCandidates }>('@src/mb_en
 jest.mock('@src/mb_enhanced_cover_art_uploads/providers');
 jest.mock('@src/mb_enhanced_cover_art_uploads/form');
 
-const mockXhr = gmxhr as jest.MockedFunction<typeof gmxhr>;
+
+const mockpRetry = pRetry as jest.MockedFunction<typeof pRetry>;
+// eslint-disable-next-line jest/unbound-method
+const mockRequestGet = request.get as unknown as jest.Mock<Promise<Response>, [string | URL, unknown]>;
+// eslint-disable-next-line jest/unbound-method
+const mockLoggerWarn = LOGGER.warn as unknown as jest.Mock<void, [string, unknown]>;
 const mockGetMaximisedCandidates = getMaximisedCandidates as jest.MockedFunction<typeof getMaximisedCandidates>;
 const mockGetProvider = getProvider as jest.MockedFunction<typeof getProvider>;
 const mockGetProviderByDomain = getProviderByDomain as jest.MockedFunction<typeof getProvider>;
@@ -77,6 +90,11 @@ function disableDummyFetch(mock: FetchImageContentsSpy): void {
     mock.mockRestore();
 }
 
+beforeAll(() => {
+    // Mock p-retry so that it doesn't retry on image content fetching failure.
+    mockpRetry.mockImplementation(((fn) => (fn(0))) as typeof pRetry);
+});
+
 beforeEach(() => {
     mockEnqueueImage.mockClear();
     mockFindImages.mockReset();
@@ -84,28 +102,66 @@ beforeEach(() => {
     hooks.onFetchFinished.mockClear();
     hooks.onFetchProgress.mockClear();
     hooks.onFetchStarted.mockClear();
+    mockLoggerWarn.mockReset();
 });
 
 describe('fetching image contents', () => {
     let fetchImageContents: typeof ImageFetcher.prototype['fetchImageContents'];
+    // Used to register when a retry occurs in the p-retry mock, so we can verify in the tests.
+    const onRetry = jest.fn();
+
+    beforeAll(() => {
+        // Mock retrying behaviour so we can test it.
+        mockpRetry.mockImplementation(async (fn, options) => {
+            try {
+                // eslint-disable-next-line @typescript-eslint/return-await
+                return await fn(0);
+            } catch (err) {
+                Object.defineProperties(err, {
+                    attemptNumber: { value: 1, writable: false },
+                    retriesLeft: { value: 1, writable: false },
+                });
+                await options?.onFailedAttempt?.(err as FailedAttemptError);
+                // Call the onRetry mock so we can verify when a retry would've
+                // occurred.
+                onRetry();
+                return fn(1);
+            }
+        });
+    });
 
     beforeEach(() => {
         const fetcher = new ImageFetcher(hooks);
         fetchImageContents = fetcher['fetchImageContents'].bind(fetcher);
+        onRetry.mockClear();
     });
 
-    it('rejects on HTTP error', async () => {
-        mockXhr.mockRejectedValueOnce(new NetworkError(new URL('https://example.com')));
+    afterAll(() => {
+        mockpRetry.mockImplementation((fn) => Promise.resolve(fn(0)));
+    });
+
+    it('rejects on network error', async () => {
+        mockRequestGet.mockRejectedValueOnce(new NetworkError(new URL('https://example.com')));
 
         await expect(fetchImageContents(new URL('https://example.com/broken'), 'test.jpg', 0, {}))
             .rejects.toBeInstanceOf(NetworkError);
+        expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it('rejects on HTTP 404 error', async () => {
+        mockRequestGet.mockRejectedValue(createHttpError(createBlobResponse({ status: 404 })));
+
+        const result = fetchImageContents(new URL('https://example.com/broken'), 'test.jpg', 0, {});
+
+        await expect(result).rejects.toBeInstanceOf(HTTPResponseError);
+        expect(onRetry).not.toHaveBeenCalled();
     });
 
     it('rejects on text response', async () => {
-        mockXhr.mockResolvedValueOnce(createXhrResponse({
-            finalUrl: 'https://example.com/broken',
-            response: new Blob(['test']),
-            responseHeaders: 'Content-Type: text/html; charset=utf-8',
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/broken',
+            blob: new Blob(['test']),
+            headers: new Headers({ 'Content-Type': 'text/html; charset=utf-8' }),
         }));
 
         await expect(fetchImageContents(new URL('https://example.com/broken'), 'test.jpg', 0, {}))
@@ -113,10 +169,10 @@ describe('fetching image contents', () => {
     });
 
     it('rejects on unsupported provider page', async () => {
-        mockXhr.mockResolvedValueOnce(createXhrResponse({
-            finalUrl: 'https://example.com/not-an-album',
-            response: new Blob(['test']),
-            responseHeaders: 'Content-Type: text/html; charset=utf-8',
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/not-an-album',
+            blob: new Blob(['test']),
+            headers: new Headers({ 'Content-Type': 'text/html; charset=utf-8' }),
         }));
         mockGetProviderByDomain.mockImplementationOnce(() => fakeProvider);
 
@@ -125,10 +181,10 @@ describe('fetching image contents', () => {
     });
 
     it('rejects on invalid image', async () => {
-        mockXhr.mockResolvedValueOnce(createXhrResponse({
-            finalUrl: 'https://example.com/broken',
-            response: new Blob(['test']),
-            responseHeaders: 'Content-Type: application/json',
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/broken',
+            blob: new Blob(['test']),
+            headers: new Headers({ 'Content-Type': 'application/json' }),
         }));
 
         await expect(fetchImageContents(new URL('https://example.com/broken'), 'test.jpg', 0, {}))
@@ -136,9 +192,9 @@ describe('fetching image contents', () => {
     });
 
     it('rejects on invalid image without content-type header', async () => {
-        mockXhr.mockResolvedValueOnce(createXhrResponse({
-            finalUrl: 'https://example.com/broken',
-            response: new Blob(['test']),
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/broken',
+            blob: new Blob(['test']),
         }));
 
         await expect(fetchImageContents(new URL('https://example.com/broken'), 'test.jpg', 0, {}))
@@ -146,9 +202,9 @@ describe('fetching image contents', () => {
     });
 
     it('resolves with fetched image', async () => {
-        mockXhr.mockResolvedValueOnce(createXhrResponse({
-            finalUrl: 'https://example.com/working',
-            response: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/working',
+            blob: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
         }));
 
         await expect(fetchImageContents(new URL('https://example.com/working'), 'test.jpg', 0, {}))
@@ -167,10 +223,49 @@ describe('fetching image contents', () => {
             });
     });
 
+    it('retries on 429 response', async () => {
+        mockRequestGet.mockRejectedValueOnce(createHttpError(createBlobResponse({
+            status: 429,
+        })));
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/working',
+            blob: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
+        }));
+
+        await expect(fetchImageContents(new URL('https://example.com/working'), 'test.jpg', 0, {}))
+            .resolves.toMatchObject({
+                file: {
+                    type: 'image/png',
+                    name: 'test.0.png',
+                },
+                requestedUrl: {
+                    href: 'https://example.com/working',
+                },
+                fetchedUrl: {
+                    href: 'https://example.com/working',
+                },
+                wasRedirected: false,
+            });
+        expect(onRetry).toHaveBeenCalledOnce();
+    });
+
+    it('rejects on too many 429 responses', async () => {
+        mockRequestGet.mockRejectedValueOnce(createHttpError(createBlobResponse({
+            status: 429,
+        })));
+        mockRequestGet.mockRejectedValueOnce(createHttpError(createBlobResponse({
+            status: 429,
+        })));
+
+        await expect(fetchImageContents(new URL('https://example.com/working'), 'test.jpg', 0, {}))
+            .rejects.toBeInstanceOf(HTTPResponseError);
+        expect(onRetry).toHaveBeenCalledOnce();
+    });
+
     it('retains redirection information', async () => {
-        mockXhr.mockResolvedValueOnce(createXhrResponse({
-            finalUrl: 'https://example.com/redirected',
-            response: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
+        mockRequestGet.mockResolvedValueOnce(createBlobResponse({
+            url: 'https://example.com/redirected',
+            blob: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
         }));
 
         await expect(fetchImageContents(new URL('https://example.com/working'), 'test.jpg', 0, {}))
@@ -185,15 +280,29 @@ describe('fetching image contents', () => {
             });
     });
 
+    it('warns when redirect could not be determined', async () => {
+        const response = createBlobResponse({
+            blob: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
+        });
+        // Need to set explicitly because `createBlobResponse` creates a random
+        // URL if we provide it `undefined`.
+        Object.defineProperty(response, 'url', { value: undefined });
+        mockRequestGet.mockResolvedValueOnce(response);
+
+        await expect(fetchImageContents(new URL('https://example.com/working'), 'test.jpg', 0, {}))
+            .toResolve();
+        expect(mockLoggerWarn).toHaveBeenCalledWith(expect.stringContaining('redirect'));
+    });
+
     it('assigns unique ID to each file name', async () => {
-        mockXhr
-            .mockResolvedValueOnce(createXhrResponse({
-                finalUrl: 'https://example.com/working',
-                response: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
+        mockRequestGet
+            .mockResolvedValueOnce(createBlobResponse({
+                url: 'https://example.com/working',
+                blob: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
             }))
-            .mockResolvedValueOnce(createXhrResponse({
-                finalUrl: 'https://example.com/working',
-                response: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
+            .mockResolvedValueOnce(createBlobResponse({
+                url: 'https://example.com/working',
+                blob: new Blob([Uint32Array.from([0x474E5089, 0xDEADBEEF])]),
             }));
 
         await expect(fetchImageContents(new URL('https://example.com/working'), 'test.jpg', 0, {}))
@@ -528,8 +637,7 @@ describe('fetching images from providers', () => {
         ]);
         await fetchImagesFromProvider({ url: new URL('https://example.com') }, fakeProvider, false);
 
-        expect(mockEnqueueImage).toHaveBeenCalledOnce();
-        expect(mockEnqueueImage).toHaveBeenCalledWith(expect.objectContaining({
+        expect(mockEnqueueImage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Bad type defs.
             content: expect.objectContaining({
                 name: '1.0.jpg',
@@ -812,8 +920,7 @@ describe('fetching images', () => {
     it('enqueues the image', async () => {
         await fetcher.fetchImages({ url: new URL('https://example.com/1'), types: [ArtworkTypeIDs.Medium], comment: 'comment' }, false);
 
-        expect(mockEnqueueImage).toHaveBeenCalledOnce();
-        expect(mockEnqueueImage).toHaveBeenCalledWith(expect.objectContaining({
+        expect(mockEnqueueImage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Bad type defs.
             content: expect.objectContaining({
                 name: '1.0.jpg',

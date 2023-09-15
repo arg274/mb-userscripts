@@ -1,10 +1,12 @@
 {
   "extends": [
     "config:base",
-    "schedule:monthly",
     ":semanticCommitTypeAll(build)",
     ":maintainLockFilesMonthly",
     ":label(dependencies)"
+  ],
+  "schedule": [
+    "on the first day of the month"
   ],
   "pin": {
     "enabled": true,
@@ -17,7 +19,10 @@
   },
   "lockFileMaintenance": {
     "automerge": true,
-    "automergeType": "branch"
+    "automergeType": "branch",
+    "schedule": [
+      "before 11am on the first day of the month"
+    ]
   },
   "packageRules": [
     {
@@ -31,7 +36,7 @@
       ],
       "automerge": true,
       "automergeType": "branch",
-      "groupName": "dev dependencies (non-major)",
+      "groupName": "dev dependencies non-major",
       "excludePackageNames": [
         "babel-plugin-transform-async-to-promises"
       ]
